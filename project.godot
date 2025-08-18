@@ -11,8 +11,13 @@ config_version=5
 [application]
 
 config/name="godot-hiqnet"
+run/main_scene="uid://h6y26ukrm4y6"
 config/features=PackedStringArray("4.4", "GL Compatibility")
 config/icon="res://assets/icon.svg"
+
+[autoload]
+
+HQ="*res://hiqnet/HiQClient.gd"
 
 [rendering]
 
