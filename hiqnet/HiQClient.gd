@@ -12,9 +12,18 @@ signal network_state_changed(new_state: NetworkState)
 ## Emitted when the discovery state is changed
 signal discovery_state_changed(new_state)
 
+## Emitted when a device is discovered on the network
+signal device_discovered(device: HiQNetDevice)
+
+## Emitted when a device is connected
+signal device_connected(device: HiQNetDevice)
+
 
 ## The TCP/UDP port for HiQNet
 const HIQNET_PORT: int = 3804
+
+## Device number to use when sending a message to broadcast
+const DEVICE_NUMBER_BROADCAST: int = 65535
 
 
 ## Enum for the NetworkState
@@ -30,6 +39,9 @@ enum DiscoveryState {
 	ENABLED,			## Send discovery at a set interval
 }
 
+## Copy of HiQNetHeader.Flags
+const Flags: Dictionary[String, int] = HiQNetHeader.Flags
+
 
 ## -------------------
 ## Network Connections
@@ -41,11 +53,17 @@ var _network_state: NetworkState = NetworkState.OFFLINE
 ## The PacketPeerUDP for TX/RX broadcast
 var _udp_broadcast: PacketPeerUDP = PacketPeerUDP.new()
 
+## The TCPServer for incomming connections
+var _tcp_server: TCPServer = TCPServer.new()
+
+## Stores all current TCP streams
+var _stream_peers: Array[StreamPeerTCP]
+
 ## IP Address of this device
-var _ip_address: PackedByteArray = [127,0,0,1]
+var _ip_address: PackedByteArray = [192,168,1,70]
 
 ## Mac Address of this device
-var _mac_address: PackedByteArray = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+var _mac_address: PackedByteArray = [0x00, 0x17, 0x24, 0x82, 0x62, 0x63]
 
 ## Subnet Mask of this device
 var _subnet_mask: PackedByteArray = [0xff, 0xff, 0xff, 0x00]
@@ -73,12 +91,18 @@ var _discovery_timer: Timer = Timer.new()
 var _device_number: int = 11111
 
 ## Serial Number of this device
-var _serial_number: int = 0x00000000000000000000000000000000
+var _serial_number: PackedByteArray = [0x53, 0x69, 0x43, 0x6f, 0x6d, 0x70, 0x61, 0x63, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+## Dictionary containing all the HiQNetDevices that have been discovred but not yet connected
+var _discovered_devices: Dictionary[int, HiQNetDevice]
+
+## Dictionary containing all the HiQNetDevices that have been connected to
+var _connected_devices: Dictionary[int, HiQNetDevice]
 
 
 ## Init
 func _init() -> void:
-	_device_number = randi_range(1, 65535)
+	#_device_number = randi_range(1, DEVICE_NUMBER_BROADCAST-1)
 	_udp_broadcast.set_broadcast_enabled(true)
 	_udp_broadcast.set_dest_address("255.255.255.255", HIQNET_PORT)
 
@@ -87,7 +111,10 @@ func _init() -> void:
 func _ready() -> void:
 	_discovery_timer.wait_time = _discovery_interval
 	_discovery_timer.autostart = true
-	_discovery_timer.timeout.connect(send_discovery_broadcast)
+	_discovery_timer.timeout.connect(func ():
+		if _discovery_state == DiscoveryState.ENABLED:
+			send_discovery_broadcast()
+	)
 	
 	add_child(_discovery_timer)
 	go_online()
@@ -99,8 +126,34 @@ func _process(delta: float) -> void:
 		var packet: PackedByteArray = _udp_broadcast.get_packet()
 		var message: HiQNetHeader = HiQNetHeader.phrase_packet(packet)
 		
-		if message and message.source_device != _device_number:
-			print("Found Device: ", message.source_device)
+		handle_message(message)
+	
+	if _tcp_server.is_connection_available():
+		var stream: StreamPeerTCP = _tcp_server.take_connection()
+		_stream_peers.append(stream)
+	
+	for stream: StreamPeerTCP in _stream_peers.duplicate():
+		stream.poll()
+
+
+## Handles an incomming message
+func handle_message(p_message: HiQNetHeader) -> void:
+	if not is_instance_valid(p_message) or p_message.source_device == _device_number or p_message.dest_device not in [_device_number, DEVICE_NUMBER_BROADCAST]:
+		return
+	
+	match p_message.message_type:
+		HiQNetHeader.MessageType.DiscoInfo:
+			if not has_seen_device(p_message.source_device):
+				var device: HiQNetDevice = HiQNetDevice.create_from_discovery(p_message)
+				
+				add_child(device)
+				_discovered_devices[p_message.source_device] = device
+				device_discovered.emit(device)
+	
+	var device: HiQNetDevice = get_device_from_number(p_message.source_device)
+	
+	if device:
+		device.handle_message(p_message)
 
 
 ## Takes this HiQNetClient online
@@ -125,6 +178,16 @@ func go_offline() -> bool:
 	return true
 
 
+## Gets the device number for this device
+func get_device_number() -> int:
+	return _device_number
+
+
+## Returns a device from the given device number, or null
+func get_device_from_number(p_device_number: int) -> HiQNetDevice:
+	return _connected_devices.get(p_device_number, _discovered_devices.get(p_device_number, null))
+
+
 ## Sets the discovery state
 func set_discovery_state(p_discovery_state: DiscoveryState) -> bool:
 	if p_discovery_state == _discovery_state:
@@ -134,6 +197,11 @@ func set_discovery_state(p_discovery_state: DiscoveryState) -> bool:
 	discovery_state_changed.emit(_discovery_state)
 	
 	return true
+
+
+## Returns true if the given device number has been seen on the network
+func has_seen_device(p_device_number: int) -> bool:
+	return p_device_number in _discovered_devices or p_device_number in _connected_devices
 
 
 ## Auto fill the infomation in a HiQNetHeadder for sending to broadcast

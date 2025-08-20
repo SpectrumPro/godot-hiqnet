@@ -9,6 +9,9 @@ class_name HiQNetHeader extends RefCounted
 ## HiQNet version
 const HIQNET_VERSION: int = 2 
 
+## The length of DataType.LONG
+const LONG_LENGTH: int = 4
+
 
 ## Message type enum
 enum MessageType {
@@ -60,6 +63,25 @@ enum Flags {
 static var ClassTypes: Dictionary[int, Script] = {
 	MessageType.DiscoInfo: HiQNetDiscoInfo
 }
+
+
+## Class to repersent a parameter on a device
+class Parameter extends Object:
+	## Parameter ID
+	var id: int = 0
+	
+	## DataType of the value
+	var data_type: DataType = DataType.BYTE
+	
+	## The value
+	var value: Variant = 0
+	
+	
+	## Init
+	func _init(p_id: int, p_data_type: DataType = data_type, p_value: Variant = value) -> void:
+		id = p_id
+		data_type = p_data_type
+		value = p_value
 
 
 ## HiQNet ID of this device
@@ -143,6 +165,97 @@ func get_as_packet() -> PackedByteArray:
 	return header
 
 
+## Sets or clears the REQUEST_ACK flag
+func set_request_ack(value: bool) -> void:
+	if value:
+		flags |= Flags.REQUEST_ACK
+	else:
+		flags &= ~Flags.REQUEST_ACK
+
+
+## Sets or clears the ACKNOWLEDGEMENT flag
+func set_acknowledgement(value: bool) -> void:
+	if value:
+		flags |= Flags.ACKNOWLEDGEMENT
+	else:
+		flags &= ~Flags.ACKNOWLEDGEMENT
+
+
+## Sets or clears the INFORMATION flag
+func set_information(value: bool) -> void:
+	if value:
+		flags |= Flags.INFORMATION
+	else:
+		flags &= ~Flags.INFORMATION
+
+
+## Sets or clears the ERROR flag
+func set_error(value: bool) -> void:
+	if value:
+		flags |= Flags.ERROR
+	else:
+		flags &= ~Flags.ERROR
+
+
+## Sets or clears the GUARANTEED flag
+func set_guaranteed(value: bool) -> void:
+	if value:
+		flags |= Flags.GUARANTEED
+	else:
+		flags &= ~Flags.GUARANTEED
+
+
+## Sets or clears the MULTIPART flag
+func set_multipart(value: bool) -> void:
+	if value:
+		flags |= Flags.MULTIPART
+	else:
+		flags &= ~Flags.MULTIPART
+
+
+## Sets or clears the SESSION_NUMBER flag
+func set_session_number(value: bool) -> void:
+	if value:
+		flags |= Flags.SESSION_NUMBER
+	else:
+		flags &= ~Flags.SESSION_NUMBER
+
+
+## Returns true if REQUEST_ACK flag is set
+func is_request_ack() -> bool:
+	return (flags & Flags.REQUEST_ACK) != 0
+
+
+## Returns true if ACKNOWLEDGEMENT flag is set
+func is_acknowledgement() -> bool:
+	return (flags & Flags.ACKNOWLEDGEMENT) != 0
+
+
+## Returns true if INFORMATION flag is set
+func is_information() -> bool:
+	return (flags & Flags.INFORMATION) != 0
+
+
+## Returns true if ERROR flag is set
+func is_error() -> bool:
+	return (flags & Flags.ERROR) != 0
+
+
+## Returns true if GUARANTEED flag is set
+func is_guaranteed() -> bool:
+	return (flags & Flags.GUARANTEED) != 0
+
+
+## Returns true if MULTIPART flag is set
+func is_multipart() -> bool:
+	return (flags & Flags.MULTIPART) != 0
+
+
+## Returns true if SESSION_NUMBER flag is set
+func is_session_number() -> bool:
+	return (flags & Flags.SESSION_NUMBER) != 0
+
+
 ## Decodes header from a packet into a HiQNetHeader object
 static func phrase_packet(p_packet: PackedByteArray) -> HiQNetHeader:
 	if not is_packet_valid(p_packet):
@@ -216,47 +329,126 @@ static func is_packet_valid(packet: PackedByteArray) -> bool:
 	return packet.size() >= 25 and packet[0] == HIQNET_VERSION
 
 
-## Decodes parameters from a packet
-static func decode_parameters(packet: PackedByteArray) -> Dictionary[int, Array]:
-	var parameters: Dictionary[int, Array] = {}
-	var num_parameters: int = (packet[0] << 8) | packet[1]
-	var offset: int = 2
+## Decodes a HiQnet parameter packet into a dictionary of Parameter objects
+static func decode_parameters(p_packet: PackedByteArray) -> Dictionary[int, Parameter]:
+	var parameters: Dictionary[int, Parameter] = {}
+	
+	# The first 2 bytes are the number of parameters (big-endian)
+	var num_parameters: int = (p_packet[0] << 8) | p_packet[1]
+	var offset: int = 2  # Start reading after the count
 	
 	for i in range(num_parameters):
-		var parameter_id: int = (packet[offset] << 8) | packet[offset + 1]
+		# Each parameter starts with a 2-byte Parameter ID (big-endian)
+		if offset + 2 > p_packet.size():
+			break
+		var pid: int = (p_packet[offset] << 8) | p_packet[offset + 1]
 		offset += 2
 		
-		var data_type: int = packet[offset]
+		# Next byte is the DataType
+		if offset + 1 > p_packet.size():
+			break
+		var data_type: DataType = p_packet[offset]
 		offset += 1
 		
 		match data_type:
 			DataType.STRING:
-				var string_length: int = (packet[offset] << 8) | packet[offset + 1]
+				# String length is 2 bytes (big-endian) including null terminator
+				if offset + 2 > p_packet.size():
+					break
+				var string_length: int = (p_packet[offset] << 8) | p_packet[offset + 1]
 				offset += 2
 				
-				var result: String = ""
-				for index in range(0, string_length, 2):
-					result += char((packet[offset + index] << 8) | packet[offset + index + 1])
+				# Make sure the packet has enough bytes
+				if offset + string_length > p_packet.size():
+					break
+				
+				# Slice the string bytes and decode UTF-16
+				var string_bytes: PackedByteArray = p_packet.slice(offset, offset + string_length)
+				var result: String = string_bytes.get_string_from_utf16()
+				
+				# Optional: strip null terminator if present
+				if result.ends_with("\u0000"):
+					result = result.left(result.length() - 1)
 				
 				offset += string_length
-				parameters[parameter_id] = [DataType.STRING, result]
+				parameters[pid] = Parameter.new(pid, DataType.STRING, result)
 			
 			DataType.BLOCK:
-				var block_length: int = (packet[offset] << 8) | packet[offset + 1]
+				# Block length is 2 bytes (big-endian)
+				if offset + 2 > p_packet.size():
+					break
+				var block_length: int = (p_packet[offset] << 8) | p_packet[offset + 1]
 				offset += 2
 				
-				var block_value: PackedByteArray = packet.slice(offset, offset + block_length)
+				# Make sure the packet has enough bytes
+				if offset + block_length > p_packet.size():
+					break
+				
+				var block_value: PackedByteArray = p_packet.slice(offset, offset + block_length)
 				offset += block_length
 				
-				parameters[parameter_id] = [DataType.BLOCK, block_value]
+				parameters[pid] = Parameter.new(pid, DataType.BLOCK, block_value)
 			
 			DataType.LONG:
-				var value: int = (packet[offset] << 24) | (packet[offset + 1] << 16) | (packet[offset + 2] << 8) | packet[offset + 3]
+				# Long value is 4 bytes (big-endian)
+				if offset + LONG_LENGTH > p_packet.size():
+					break
+				var value: int = (p_packet[offset] << 24) | (p_packet[offset + 1] << 16) | (p_packet[offset + 2] << 8) | p_packet[offset + 3]
 				offset += 4
 				
-				parameters[parameter_id] = [DataType.LONG, value]
+				parameters[pid] = Parameter.new(pid, DataType.LONG, value)
 	
 	return parameters
+
+
+## Encodes parameters into a packet with null-terminated strings
+static func encode_parameters(p_parameters: Dictionary[int, Parameter]) -> PackedByteArray:
+	var packet: PackedByteArray= PackedByteArray()
+	
+	# Write number of parameters (2 bytes, big-endian)
+	packet.append_array(ba(p_parameters.size(), 2))
+	
+	# Encode each parameter
+	for pid in p_parameters.keys():
+		var param: Parameter = p_parameters[pid]
+		
+		# Write PID (2 bytes, big-endian)
+		packet.append_array(ba(pid, 2))
+		
+		# Write DataType (1 byte)
+		packet.append(param.data_type)
+		
+		match param.data_type:
+			DataType.STRING:
+				# Convert string to UTF-16 (big-endian)
+				var string_bytes: PackedByteArray = param.value.to_utf16_buffer()
+				
+				# Append null terminator (2 bytes)
+				string_bytes.append(0)
+				string_bytes.append(0)
+				
+				# Write length (2 bytes, includes null terminator)
+				packet.append_array(ba(string_bytes.size(), 2))
+				
+				# Write string data
+				packet.append_array(string_bytes)
+			
+			DataType.BLOCK:
+				var block_bytes: PackedByteArray = param.value
+				
+				# Write length (2 bytes)
+				packet.append_array(ba(block_bytes.size(), 2))
+				
+				# Write block data
+				packet.append_array(block_bytes)
+			
+			DataType.LONG:
+				var value: int = param.value
+				
+				# Write 4-byte signed integer
+				packet.append_array(ba(value, 4))
+	
+	return packet
 
 
 ## Override this function to provide a packet payload

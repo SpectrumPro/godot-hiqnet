@@ -10,7 +10,7 @@ class_name HiQNetDiscoInfo extends HiQNetHeader
 var cost: int = 1
 
 ## The serial number of this device
-var serial_number: int = 0x00000000000000000000000000000000
+var serial_number: PackedByteArray = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
 
 ## Mac address of sourse deivce
 var mac_address: PackedByteArray = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
@@ -42,24 +42,23 @@ func _init() -> void:
 ## Returns this DiscoInfo object as a network packet
 func _get_as_packet() -> PackedByteArray:
 	var message: PackedByteArray = PackedByteArray()
-		
-	message.append_array(ba(source_device, 2))
 	
-	message.append(cost) # Cost
+	message.append_array(ba(source_device, 2))		## Source Device ID
+	message.append(cost) 							## Cost
 	
-	message.append_array([0x00, 0x10]) # Serial Number Length
-	message.append_array(ba(serial_number, 16))
+	message.append_array([0x00, 0x10]) 				## Serial Number Length
+	message.append_array(serial_number)				## Serial Number
 	
-	message.append_array(ba(max_size, 4)) # Max Size
-	message.append_array(ba(keep_alive, 2)) # Keep Alive
-	message.append(1) # Network ID: TCP/IP
+	message.append_array(ba(max_size, 4)) 			## Max Size
+	message.append_array(ba(keep_alive, 2)) 		## Keep Alive
+	message.append(1) 								## Network ID: TCP/IP
 	
-	message.append_array(mac_address)
-	message.append(int(dhcp)) # DHCP = true
-	message.append_array(ip_address)
+	message.append_array(mac_address)				## MAC Address
+	message.append(int(dhcp))						## DHCP = true
+	message.append_array(ip_address)				## IP Address
 	
-	message.append_array(subnet_mask) # Subnet Mask
-	message.append_array(gateway) # Gateway
+	message.append_array(subnet_mask)				## Subnet Mask
+	message.append_array(gateway)					## Gateway
 	
 	return message
 
@@ -70,8 +69,7 @@ func _phrase_packet(p_packet: PackedByteArray) -> void:
 	cost = p_packet[2]
 	
 	var serial_length: int = (p_packet[3] << 8) | p_packet[4]
-	for byte in p_packet.slice(5, serial_length + 2):
-		serial_number = (serial_number << 8) | byte
+	serial_number = p_packet.slice(5, serial_length + 2)
 	
 	max_size = (p_packet[21] << 32) | (p_packet[22] << 16) | (p_packet[23] << 8) | p_packet[24]
 	keep_alive = (p_packet[25] << 8) | p_packet[26]
