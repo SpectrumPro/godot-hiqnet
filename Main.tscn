@@ -10,14 +10,48 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_glv2v")
-discovred_tree = NodePath("DiscovredTree")
+discovred_tree = NodePath("VBoxContainer/DiscovredTree")
 
-[node name="DiscovredTree" type="Tree" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+
+[node name="DiscovredTree" type="Tree" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
 column_titles_visible = true
 hide_root = true
+select_mode = 1
+
+[node name="PanelContainer" type="PanelContainer" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer/PanelContainer"]
+layout_mode = 2
+
+[node name="StartSession" type="Button" parent="VBoxContainer/PanelContainer/HBoxContainer"]
+layout_mode = 2
+text = "Start Session"
+
+[node name="EndSession" type="Button" parent="VBoxContainer/PanelContainer/HBoxContainer"]
+layout_mode = 2
+text = "End Session"
+
+[node name="DisconnectTCP" type="Button" parent="VBoxContainer/PanelContainer/HBoxContainer"]
+layout_mode = 2
+text = "Disconnect TCP"
+
+[node name="ReConnectTCP" type="Button" parent="VBoxContainer/PanelContainer/HBoxContainer"]
+layout_mode = 2
+text = "Disconnect TCP"
+
+[connection signal="item_selected" from="VBoxContainer/DiscovredTree" to="." method="_on_discovred_tree_item_selected"]
+[connection signal="nothing_selected" from="VBoxContainer/DiscovredTree" to="." method="_on_discovred_tree_nothing_selected"]
+[connection signal="pressed" from="VBoxContainer/PanelContainer/HBoxContainer/StartSession" to="." method="_on_start_session_pressed"]
+[connection signal="pressed" from="VBoxContainer/PanelContainer/HBoxContainer/EndSession" to="." method="_on_end_session_pressed"]
+[connection signal="pressed" from="VBoxContainer/PanelContainer/HBoxContainer/DisconnectTCP" to="." method="_on_disconnect_tcp_pressed"]
+[connection signal="pressed" from="VBoxContainer/PanelContainer/HBoxContainer/ReConnectTCP" to="." method="_on_re_connect_tcp_pressed"]

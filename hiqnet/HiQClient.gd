@@ -63,7 +63,8 @@ var _stream_peers: Array[StreamPeerTCP]
 var _ip_address: PackedByteArray = [192,168,1,70]
 
 ## Mac Address of this device
-var _mac_address: PackedByteArray = [0x00, 0x17, 0x24, 0x82, 0x62, 0x63]
+#var _mac_address: PackedByteArray = [0x00, 0x17, 0x24, 0x82, 0x62, 0x63]
+var _mac_address: PackedByteArray = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
 
 ## Subnet Mask of this device
 var _subnet_mask: PackedByteArray = [0xff, 0xff, 0xff, 0x00]
@@ -77,7 +78,7 @@ var _subnet_mask: PackedByteArray = [0xff, 0xff, 0xff, 0x00]
 var _discovery_state: DiscoveryState = DiscoveryState.ENABLED
 
 ## Discovery time interval in seconds
-var _discovery_interval: int = 1
+var _discovery_interval: int = 5
 
 ## The Timer node used for discovery 
 var _discovery_timer: Timer = Timer.new()
@@ -88,10 +89,11 @@ var _discovery_timer: Timer = Timer.new()
 ## -------------
 
 ## HiQNet device number of this device
-var _device_number: int = 11111
+var _device_number: int = 12345
 
 ## Serial Number of this device
-var _serial_number: PackedByteArray = [0x53, 0x69, 0x43, 0x6f, 0x6d, 0x70, 0x61, 0x63, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+#var _serial_number: PackedByteArray = [0x53, 0x69, 0x43, 0x6f, 0x6d, 0x70, 0x61, 0x63, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+var _serial_number: PackedByteArray = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
 
 ## Dictionary containing all the HiQNetDevices that have been discovred but not yet connected
 var _discovered_devices: Dictionary[int, HiQNetDevice]
@@ -104,7 +106,7 @@ var _connected_devices: Dictionary[int, HiQNetDevice]
 func _init() -> void:
 	#_device_number = randi_range(1, DEVICE_NUMBER_BROADCAST-1)
 	_udp_broadcast.set_broadcast_enabled(true)
-	_udp_broadcast.set_dest_address("255.255.255.255", HIQNET_PORT)
+	_udp_broadcast.set_dest_address("192.168.1.255", HIQNET_PORT)
 
 
 ## Ready
@@ -134,6 +136,16 @@ func _process(delta: float) -> void:
 	
 	for stream: StreamPeerTCP in _stream_peers.duplicate():
 		stream.poll()
+		
+		if stream.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+			while stream.get_available_bytes() > 0:
+				var packet: PackedByteArray = stream.get_data(stream.get_available_bytes())[1]
+				while HiQNetHeader.is_packet_valid(packet):
+					var length: int = (packet[2] << 32) | (packet[3] << 16) | (packet[4] << 8) | packet[5]
+					var sliced_packet: PackedByteArray = packet.slice(0, length)
+					
+					handle_message(HiQNetHeader.phrase_packet(sliced_packet))
+					packet = packet.slice(length)
 
 
 ## Handles an incomming message
@@ -161,7 +173,11 @@ func go_online() -> bool:
 	if _network_state == NetworkState.ONLINE:
 		return false
 	
-	_udp_broadcast.bind(HIQNET_PORT)
+	_udp_broadcast.bind(HIQNET_PORT, HiQNetHeader.bytes_to_ip(_ip_address))
+	_tcp_server.listen(HIQNET_PORT, HiQNetHeader.bytes_to_ip(_ip_address))
+	
+	if _discovery_state == DiscoveryState.ENABLED:
+		send_discovery_broadcast()
 	
 	_set_network_state(NetworkState.ONLINE)
 	return true
@@ -173,9 +189,53 @@ func go_offline() -> bool:
 		return false
 	
 	_udp_broadcast.close()
+	_tcp_server.stop()
 	
 	_set_network_state(NetworkState.OFFLINE)
 	return true
+
+
+## Auto fill the infomation in a HiQNetHeadder for sending to broadcast
+func auto_full_headder_broadcast(p_headder: HiQNetHeader, p_flags: HiQNetHeader.Flags = 0) -> HiQNetHeader:
+	p_headder.source_device = _device_number
+	p_headder.source_address = [0, 0, 0, 0]
+	p_headder.dest_device = 65535
+	p_headder.dest_address = [0, 0, 0, 0]
+	p_headder.flags = p_flags
+	
+	return p_headder
+
+
+## Sends a discovery packet to broadcast
+func send_discovery_broadcast() -> Error:
+	var disco: HiQNetDiscoInfo = auto_full_headder_broadcast(HiQNetDiscoInfo.new())
+	
+	disco.serial_number = _serial_number
+	disco.mac_address = _mac_address
+	disco.ip_address = _ip_address
+	disco.subnet_mask = _subnet_mask
+	
+	return _udp_broadcast.put_packet(disco.get_as_packet())
+
+
+## Returns the IP Address of this device
+func get_ip_address() -> PackedByteArray:
+	return _ip_address
+
+
+## Returns the MAC Address of this device
+func get_mac_address() -> PackedByteArray:
+	return _mac_address
+
+
+## Returns the Subnet Mask of this device
+func get_subnet_mask() -> PackedByteArray:
+	return _subnet_mask
+
+
+## Returns the Serial Number of this device
+func get_serial_number() -> PackedByteArray:
+	return _serial_number
 
 
 ## Gets the device number for this device
@@ -202,29 +262,6 @@ func set_discovery_state(p_discovery_state: DiscoveryState) -> bool:
 ## Returns true if the given device number has been seen on the network
 func has_seen_device(p_device_number: int) -> bool:
 	return p_device_number in _discovered_devices or p_device_number in _connected_devices
-
-
-## Auto fill the infomation in a HiQNetHeadder for sending to broadcast
-func auto_full_headder_broadcast(p_headder: HiQNetHeader, p_flags: HiQNetHeader.Flags = 0) -> HiQNetHeader:
-	p_headder.source_device = _device_number
-	p_headder.source_address = [0, 0, 0, 0]
-	p_headder.dest_device = 65535
-	p_headder.dest_address = [0, 0, 0, 0]
-	p_headder.flags = p_flags
-	
-	return p_headder
-
-
-## Sends a discovery packet to broadcast
-func send_discovery_broadcast() -> void:
-	var disco: HiQNetDiscoInfo = auto_full_headder_broadcast(HiQNetDiscoInfo.new())
-	
-	disco.serial_number = _serial_number
-	disco.mac_address = _mac_address
-	disco.ip_address = _ip_address
-	disco.subnet_mask = _subnet_mask
-	
-	_udp_broadcast.put_packet(disco.get_as_packet())
 
 
 ## Sets the current NetworkState

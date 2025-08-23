@@ -22,7 +22,7 @@ var max_size: int = 0x00100000
 var keep_alive: int = 0x2710
 
 ## DHCP state
-var dhcp: bool = false
+var dhcp: bool = true
 
 ## Ip_address of source device
 var ip_address: PackedByteArray = [192, 168, 1, 1]

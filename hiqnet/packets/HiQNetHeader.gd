@@ -15,19 +15,19 @@ const LONG_LENGTH: int = 4
 
 ## Message type enum
 enum MessageType {
-	NONE						=-0x0001,  ## No Mesage specified
-	DiscoInfo					= 0x0000,  ## Discovery information
-	GoodBye						= 0x0007,  ## Goodbye message
-	Hello						= 0x0008,  ## Hello message
-	Locate						= 0x0129,  ## Locate message
-	MultiParamSet				= 0x0100,  ## Multi parameter set
-	MultiParamGet				= 0x0103,  ## Multi parameter get
-	GetAttributes				= 0x010D,  ## Get attributes
-	GetVDList					= 0x011A,  ## Get VD list
-	ParameterSubscribeAll		= 0x0113,  ## Subscribe all parameters
-	ParameterUnSubscribeAll		= 0x0114,  ## Unsubscribe all parameters
-	Store						= 0x0124,  ## Store command
-	Recall						= 0x0125## Recall command
+	NONE						=-0x0001,	## No Mesage specified
+	DiscoInfo					= 0x0000,	## Discovery information
+	GoodBye						= 0x0007,	## Goodbye message
+	Hello						= 0x0008,	## Hello message
+	Locate						= 0x0129,	## Locate message
+	MultiParamSet				= 0x0100,	## Multi parameter set
+	MultiParamGet				= 0x0103,	## Multi parameter get
+	GetAttributes				= 0x010D,	## Get attributes
+	GetVDList					= 0x011A,	## Get VD list
+	ParameterSubscribeAll		= 0x0113,	## Subscribe all parameters
+	ParameterUnSubscribeAll		= 0x0114,	## Unsubscribe all parameters
+	Store						= 0x0124,	## Store command
+	Recall						= 0x0125	## Recall command
 }
 
 
@@ -59,9 +59,20 @@ enum Flags {
 	SESSION_NUMBER				= (1 << 8)## Session number included
 }
 
+
+## Enum for DecodeError
+enum DecodeError {
+	NONE,						## No Error
+	LENGTH_INVALID,				## The length of the message was not long enough to decode the required data
+}
+
+
 ## Matches the MessageType enum to a class
 static var ClassTypes: Dictionary[int, Script] = {
-	MessageType.DiscoInfo: HiQNetDiscoInfo
+	MessageType.DiscoInfo: 		HiQNetDiscoInfo,
+	MessageType.Hello: 			HiQNetHello,
+	MessageType.GetAttributes: 	HiQNetGetAttributes,
+	MessageType.GoodBye: 		HiQNetGoodbye
 }
 
 
@@ -82,6 +93,14 @@ class Parameter extends Object:
 		id = p_id
 		data_type = p_data_type
 		value = p_value
+	
+	## Converts this Parameter into a string for printing
+	func _to_string() -> String:
+		return str("Parameter(", id, ", ", DataType.keys()[data_type], ", ", value, ")")
+	
+	## Returns a new copy of this Parameter
+	func duplicate() -> Parameter:
+		return Parameter.new(id, data_type, value)
 
 
 ## HiQNet ID of this device
@@ -106,7 +125,7 @@ var flags: int = 0
 var hop_count: int = 0x05 
 
 ## Packet debug sequence number
-var sequence_number: int = 0x01 
+var sequence_number: int = 0x00
 
 ## Session number if flag set
 var session_number: int = 0  
@@ -122,6 +141,9 @@ var start_seq_number: int = 0x02
 
 ## Bytes remaining in multipart (decode only)
 var bytes_remaining: int = 0  
+
+## Decode error of this message
+var decode_error: DecodeError = DecodeError.NONE
 
 
 ## Creates a HiQNet header with the given message length
@@ -352,9 +374,10 @@ static func decode_parameters(p_packet: PackedByteArray) -> Dictionary[int, Para
 		
 		match data_type:
 			DataType.STRING:
-				# String length is 2 bytes (big-endian) including null terminator
+				# String length is 2 bytes
 				if offset + 2 > p_packet.size():
 					break
+				
 				var string_length: int = (p_packet[offset] << 8) | p_packet[offset + 1]
 				offset += 2
 				
@@ -362,13 +385,11 @@ static func decode_parameters(p_packet: PackedByteArray) -> Dictionary[int, Para
 				if offset + string_length > p_packet.size():
 					break
 				
-				# Slice the string bytes and decode UTF-16
-				var string_bytes: PackedByteArray = p_packet.slice(offset, offset + string_length)
-				var result: String = string_bytes.get_string_from_utf16()
+				var slice: PackedByteArray = p_packet.slice(offset, offset + string_length)
+				var result: String = ""
 				
-				# Optional: strip null terminator if present
-				if result.ends_with("\u0000"):
-					result = result.left(result.length() - 1)
+				for index: int in range(0, string_length, 2):
+					result += char((p_packet[offset + index] << 8) | p_packet[offset + 1 + index])
 				
 				offset += string_length
 				parameters[pid] = Parameter.new(pid, DataType.STRING, result)
@@ -420,18 +441,15 @@ static func encode_parameters(p_parameters: Dictionary[int, Parameter]) -> Packe
 		
 		match param.data_type:
 			DataType.STRING:
-				# Convert string to UTF-16 (big-endian)
-				var string_bytes: PackedByteArray = param.value.to_utf16_buffer()
+				var ascii: PackedByteArray = param.value.to_ascii_buffer()
+				var length: int = ((len(ascii) * 2) + 2) if ascii else 0
+				packet.append_array(ba(length, 2)) # String Length
 				
-				# Append null terminator (2 bytes)
-				string_bytes.append(0)
-				string_bytes.append(0)
+				for char: int in ascii:
+					packet.append_array(ba(char, 2)) # String Byte
 				
-				# Write length (2 bytes, includes null terminator)
-				packet.append_array(ba(string_bytes.size(), 2))
-				
-				# Write string data
-				packet.append_array(string_bytes)
+				if length:
+					packet.append_array([0x00, 0x00]) # Append null terminator (2 bytes)
 			
 			DataType.BLOCK:
 				var block_bytes: PackedByteArray = param.value
