@@ -106,7 +106,7 @@ var _connected_devices: Dictionary[int, HiQNetDevice]
 func _init() -> void:
 	#_device_number = randi_range(1, DEVICE_NUMBER_BROADCAST-1)
 	_udp_broadcast.set_broadcast_enabled(true)
-	_udp_broadcast.set_dest_address("192.168.1.255", HIQNET_PORT)
+	_udp_broadcast.set_dest_address("255.255.255.255", HIQNET_PORT)
 
 
 ## Ready
@@ -144,12 +144,12 @@ func _process(delta: float) -> void:
 					var length: int = (packet[2] << 32) | (packet[3] << 16) | (packet[4] << 8) | packet[5]
 					var sliced_packet: PackedByteArray = packet.slice(0, length)
 					
-					handle_message(HiQNetHeader.phrase_packet(sliced_packet))
+					handle_message(HiQNetHeader.phrase_packet(sliced_packet), stream)
 					packet = packet.slice(length)
 
 
 ## Handles an incomming message
-func handle_message(p_message: HiQNetHeader) -> void:
+func handle_message(p_message: HiQNetHeader, p_stream_peer: StreamPeerTCP = null) -> void:
 	if not is_instance_valid(p_message) or p_message.source_device == _device_number or p_message.dest_device not in [_device_number, DEVICE_NUMBER_BROADCAST]:
 		return
 	
@@ -164,7 +164,10 @@ func handle_message(p_message: HiQNetHeader) -> void:
 	
 	var device: HiQNetDevice = get_device_from_number(p_message.source_device)
 	
-	if device:
+	if is_instance_valid(device):
+		if p_stream_peer:
+			device.use_stream(p_stream_peer)
+		
 		device.handle_message(p_message)
 
 
@@ -173,7 +176,7 @@ func go_online() -> bool:
 	if _network_state == NetworkState.ONLINE:
 		return false
 	
-	_udp_broadcast.bind(HIQNET_PORT, HiQNetHeader.bytes_to_ip(_ip_address))
+	_udp_broadcast.bind(HIQNET_PORT)
 	_tcp_server.listen(HIQNET_PORT, HiQNetHeader.bytes_to_ip(_ip_address))
 	
 	if _discovery_state == DiscoveryState.ENABLED:

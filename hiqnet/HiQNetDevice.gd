@@ -71,10 +71,6 @@ var _tcp_message_queue: Array[HiQNetHeader]
 ## True if this device should establish a session with the remote device once TCP connects
 var _establish_session_once_connected: bool = false
 
-## True if this device should respond to a session with the remote device once TCP connects
-var _respond_session_once_connected: bool = false
-
-
 ## -----------
 ## Device Info
 ## -----------
@@ -160,51 +156,10 @@ func _process(delta: float) -> void:
 	var status: StreamPeerTCP.Status = _tcp_peer.get_status()
 	
 	if status != _tcp_status:
-		var previous_status: StreamPeerTCP.Status = _tcp_status
-		_tcp_status = status
-		
-		match status:
-			StreamPeerTCP.STATUS_CONNECTED:
-				match _network_state:
-					NetworkState.RECONNECTING_TCP:
-						_set_network_state(NetworkState.AWAITING_SESSION_CONFIRMATION)
-						send_discovery(TransportType.TCP)
-					
-					NetworkState.CONNECTING:
-						if _establish_session_once_connected:
-							_establish_session_once_connected = false
-							
-							_local_session_number = randi_range(1, 65535)
-							send_discovery(TransportType.TCP)
-							send_hello_req(_local_session_number)
-							send_get_attributes([AttributeID.ClassName, AttributeID.NameString])
-							
-							_set_network_state(NetworkState.AWAITING_SESSION_RESPONSE)
-						
-						if _respond_session_once_connected:
-							_respond_session_once_connected = false
-							
-							_local_session_number = randi_range(1, 65535)
-							send_hello_res(_local_session_number, _remote_session_number)
-							
-							_set_network_state(NetworkState.CONNECTED)
-				
-				for message: HiQNetHeader in _tcp_message_queue:
-					send_message_tcp(message)
-				
-			
-			StreamPeerTCP.STATUS_NONE, StreamPeerTCP.STATUS_ERROR:
-				match _network_state:
-					NetworkState.CONNECTED:
-						_set_network_state(NetworkState.RECONNECTING_TCP)
-						disconnect_tcp()
-						connect_tcp()
-					
-					NetworkState.RECONNECTING_TCP:
-						_set_network_state(NetworkState.OFFLINE)
+		handle_tcp_status_change(status)
 	
 	if _tcp_status == StreamPeerTCP.STATUS_CONNECTED:
-		while _tcp_peer.get_available_bytes() > 0:
+		while _tcp_status == StreamPeerTCP.STATUS_CONNECTED and _tcp_peer.get_available_bytes() > 0:
 			var packet: PackedByteArray = _tcp_peer.get_data(_tcp_peer.get_available_bytes())[1]
 			while HiQNetHeader.is_packet_valid(packet):
 				var length: int = (packet[2] << 32) | (packet[3] << 16) | (packet[4] << 8) | packet[5]
@@ -214,10 +169,51 @@ func _process(delta: float) -> void:
 				packet = packet.slice(length)
 
 
+## Handles a change in the TCP Stream status
+func handle_tcp_status_change(p_status: StreamPeerTCP.Status) -> void:
+	_tcp_status = p_status
+	_log("TCP Status changed to: ", _tcp_status)
+	
+	match _tcp_status:
+		StreamPeerTCP.STATUS_CONNECTED:
+			match _network_state:
+				NetworkState.RECONNECTING_TCP:
+					_set_network_state(NetworkState.AWAITING_SESSION_CONFIRMATION)
+					send_discovery(false, TransportType.TCP)
+				
+				NetworkState.CONNECTING:
+					if _establish_session_once_connected:
+						_establish_session_once_connected = false
+						
+						_local_session_number = randi_range(1, 65535)
+						_log("Is auto establishing a session, with SID: ", _local_session_number)
+						
+						send_discovery(TransportType.TCP)
+						send_hello_req(_local_session_number)
+						send_get_attributes([AttributeID.ClassName, AttributeID.NameString])
+						
+						_set_network_state(NetworkState.AWAITING_SESSION_RESPONSE)
+			
+			for message: HiQNetHeader in _tcp_message_queue:
+				send_message_tcp(message)
+		
+		StreamPeerTCP.STATUS_NONE, StreamPeerTCP.STATUS_ERROR:
+			match _network_state:
+				NetworkState.CONNECTED:
+					reconnect_tcp()
+				
+				NetworkState.RECONNECTING_TCP, NetworkState.AWAITING_SESSION_CONFIRMATION:
+					_set_network_state(NetworkState.OFFLINE)
+
+
 ## Starts a session with the device
 func start_session() -> bool:
+	if _network_state != NetworkState.DISCOVERED:
+		return false
+	
 	_establish_session_once_connected = true
 	_set_network_state(NetworkState.CONNECTING)
+	
 	return connect_tcp()
 
 
@@ -229,6 +225,12 @@ func end_session() -> void:
 	
 	send_message_tcp(message)
 	_set_network_state(NetworkState.OFFLINE)
+	
+	_local_session_number = 0
+	_remote_session_number = 0
+	_establish_session_once_connected = false
+	_tcp_message_queue.clear()
+	_tcp_status = 0
 	
 	disconnect_tcp()
 
@@ -253,14 +255,35 @@ func disconnect_udp() -> bool:
 ## Connects the TCP peer, returning ERR_ALREADY_EXISTS if it is already connected
 func connect_tcp() -> Error:
 	if _tcp_peer.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+		_log("Unable to connect TCP: Alreay Connected")
 		return ERR_ALREADY_EXISTS
 	
+	_log("Connecting TCP")
 	return _tcp_peer.connect_to_host(HiQNetHeader.bytes_to_ip(_ip_address), HIQNET_PORT)
 
 
 ## Disconnects the UDP peer
 func disconnect_tcp() -> void:
 	_tcp_peer.disconnect_from_host()
+
+
+func reconnect_tcp():
+	_set_network_state(NetworkState.RECONNECTING_TCP)
+	disconnect_tcp()
+	connect_tcp()
+
+
+## Sets the StreamPeerTCP to use
+func use_stream(p_tcp_stream: StreamPeerTCP) -> bool:
+	if p_tcp_stream == _tcp_peer:
+		return false
+	
+	_tcp_peer = p_tcp_stream
+	handle_tcp_status_change(_tcp_peer.get_status())
+	
+	_log("Changing TCP stream")
+	
+	return true
 
 
 ## Sends a message to the remote device using either UDP or TCP depending on the connection state
@@ -301,6 +324,7 @@ func send_message_tcp(p_message: HiQNetHeader) -> Error:
 	p_message.set_guaranteed(true)
 	
 	if not _tcp_peer.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+		_log("Can't send message, TCP not connected, added to queue")
 		_tcp_message_queue.append(p_message)
 		return ERR_CONNECTION_ERROR
 	
@@ -323,12 +347,13 @@ func handle_message(p_message: HiQNetHeader) -> void:
 					_set_network_state(NetworkState.DISCOVERED)
 				
 				NetworkState.CONNECTED:
-					if has_active_session() and p_message.dest_device == HQ.get_device_number() and p_message.is_information():
-						send_discovery(TransportType.TCP)
+					if has_active_session() and p_message.dest_device == HQ.get_device_number():
+						send_discovery(true, TransportType.TCP)
 				
 				NetworkState.AWAITING_SESSION_CONFIRMATION:
-					if p_message.dest_device == _device_number and p_message.is_information():
+					if p_message.dest_device == HQ.get_device_number() and p_message.is_information():
 						_set_network_state(NetworkState.CONNECTED)
+						send_discovery(true, TransportType.TCP)
 		
 		MessageType.Hello:
 			p_message = p_message as HiQNetHello
@@ -338,19 +363,27 @@ func handle_message(p_message: HiQNetHeader) -> void:
 					_set_network_state(NetworkState.CONNECTED)
 			
 			elif p_message.is_guaranteed():
+				_log("Has asked to start a session, SID=", p_message.device_session_number)
 				_remote_session_number = p_message.device_session_number
-				_respond_session_once_connected = true
-				_set_network_state(NetworkState.CONNECTING)
-				connect_tcp()
+				_local_session_number = randi_range(1, 65535)
+				_log("Is responding to a session request, with SID: ", _local_session_number)
 				
+				send_hello_res(_local_session_number, _remote_session_number)
+				_set_network_state(NetworkState.CONNECTED)
+		
+		MessageType.GoodBye:
+			p_message = p_message as HiQNetGoodbye
+			_set_network_state(NetworkState.OFFLINE)
+			disconnect_tcp()
+		
 		MessageType.GetAttributes:
 			p_message = p_message as HiQNetGetAttributes
 			if p_message.is_information():
 				for attribute: HiQNetHeader.Parameter in p_message.set_attributes.values():
 					_remote_device_manager_attributes[attribute.id] = attribute.duplicate()
 			
-			elif p_message.get_attributes:
-				send_set_attributes(p_message.get_attributes.keys())
+			else:
+				send_set_attributes(p_message.get_attributes.keys(), TransportType.TCP)
 
 
 ## Auto fill the infomation in a HiQNetHeadder for sending to the remote device
@@ -365,13 +398,15 @@ func auto_full_headder(p_headder: HiQNetHeader, p_flags: HiQNetHeader.Flags = 0,
 
 
 ## Sends a discovery message to the remote device, if guaranteed == true this message will be sent via TCP
-func send_discovery(p_transport_type: TransportType = TransportType.AUTO) -> Error:
-	var message: HiQNetDiscoInfo = auto_full_headder(HiQNetDiscoInfo.new(), HiQNetHeader.Flags.INFORMATION)
+func send_discovery(p_infomation: bool = false,  p_transport_type: TransportType = TransportType.AUTO) -> Error:
+	var message: HiQNetDiscoInfo = auto_full_headder(HiQNetDiscoInfo.new(), HiQNetHeader.Flags.INFORMATION if p_infomation else 0)
 	
 	message.serial_number = HQ.get_serial_number()
 	message.mac_address = HQ.get_mac_address()
 	message.ip_address = HQ.get_ip_address()
 	message.subnet_mask = HQ.get_subnet_mask()
+	
+	_log("Sending Discovery: ", "RES" if p_infomation else "REQ")
 	
 	return send_message(message, p_transport_type)
 
@@ -394,6 +429,10 @@ func send_set_attributes(p_attributes: Array[int], p_transport_type: TransportTy
 	for id: int in p_attributes:
 		if _local_device_manager_attributes.has(id):
 			message.set_attributes[id] = _local_device_manager_attributes[id].duplicate()
+	
+	if not message.set_attributes:
+		_log("send_set_attributes() returning ERR_INVALID_PARAMETER. Wont sent attributes as no valid attributes were requested")
+		return ERR_INVALID_PARAMETER
 	
 	return send_message(message, p_transport_type)
 
@@ -506,4 +545,11 @@ func _set_network_state(p_network_state: NetworkState) -> bool:
 	_network_state = p_network_state
 	network_state_changed.emit(_network_state)
 	
+	_log("Setting NetworkState to: ", NetworkState.keys()[_network_state])
+	
 	return true
+
+
+## Logs a message to the console, with a prefix
+func _log(a="", b="", c="", d="", e="", f="", g="") -> void:
+	print("Device: ",  _device_number, " | ", a, b, c, d, e, f, g)
