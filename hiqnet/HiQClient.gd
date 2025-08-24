@@ -106,7 +106,7 @@ var _connected_devices: Dictionary[int, HiQNetDevice]
 func _init() -> void:
 	#_device_number = randi_range(1, DEVICE_NUMBER_BROADCAST-1)
 	_udp_broadcast.set_broadcast_enabled(true)
-	_udp_broadcast.set_dest_address("255.255.255.255", HIQNET_PORT)
+	_udp_broadcast.set_dest_address("192.168.1.255", HIQNET_PORT)
 
 
 ## Ready

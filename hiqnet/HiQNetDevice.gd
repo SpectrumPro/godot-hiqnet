@@ -342,16 +342,18 @@ func handle_message(p_message: HiQNetHeader) -> void:
 			_last_seen = Time.get_unix_time_from_system()
 			last_seen_time_changed.emit(_last_seen)
 			
+			_log("Got Discovery: NetworkState: ", NetworkState.keys()[_network_state])
+			
 			match _network_state:
 				NetworkState.OFFLINE:
 					_set_network_state(NetworkState.DISCOVERED)
 				
 				NetworkState.CONNECTED:
-					if has_active_session() and p_message.dest_device == HQ.get_device_number():
+					if has_active_session() and p_message.dest_device == HQ.get_device_number() and p_message.is_information():
 						send_discovery(true, TransportType.TCP)
 				
 				NetworkState.AWAITING_SESSION_CONFIRMATION:
-					if p_message.dest_device == HQ.get_device_number() and p_message.is_information():
+					if p_message.dest_device == HQ.get_device_number() and p_message.is_guaranteed():
 						_set_network_state(NetworkState.CONNECTED)
 						send_discovery(true, TransportType.TCP)
 		
