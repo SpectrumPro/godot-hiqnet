@@ -12,6 +12,9 @@ signal network_state_changed(new_state: NetworkState)
 ## Emitted when the last seen time was changed
 signal last_seen_time_changed(time: float)
 
+## Emitted when the device name is changed
+signal name_changed(new_name: String)
+
 
 ## The TCP/UDP port for HiQNet
 const HIQNET_PORT: int = HQ.HIQNET_PORT
@@ -383,6 +386,10 @@ func handle_message(p_message: HiQNetHeader) -> void:
 			if p_message.is_information():
 				for attribute: HiQNetHeader.Parameter in p_message.set_attributes.values():
 					_remote_device_manager_attributes[attribute.id] = attribute.duplicate()
+					
+					match attribute.id:
+						AttributeID.NameString:
+							name_changed.emit(type_convert(attribute.value, TYPE_STRING))
 			
 			else:
 				send_set_attributes(p_message.get_attributes.keys(), TransportType.TCP)
@@ -459,6 +466,25 @@ func send_hello_res(p_local_session_number: int, p_remote_session_number: int) -
 	return send_message_tcp(message)
 
 
+
+## Subscribe to all parameters in the given VD or object address
+func subscribe_to_all_in(p_address: Array, p_transport_type: TransportType = TransportType.AUTO) -> Error:
+	var message: HiQNetParameterSubscribeAll = auto_full_headder(HiQNetParameterSubscribeAll.new(), 0, Array(p_address, TYPE_INT, "", null))
+	
+	return send_message(message, p_transport_type)
+
+
+## Sets one or more parameters in a Virtual Device or Object
+func set_parameters(p_source_address: Array, p_dest_address: Array, p_parameters: Array, p_transport_type: TransportType = TransportType.AUTO) -> Error:
+	var message: HiQNetMultiParamSet = auto_full_headder(HiQNetMultiParamSet.new(), 0, Array(p_dest_address, TYPE_INT, "", null), Array(p_source_address, TYPE_INT, "", null))
+
+	for parameter: Variant in p_parameters:
+		if parameter is HiQNetHeader.Parameter:
+			message.set_parameters[parameter.id] = parameter
+
+			return send_message(message, p_transport_type)
+
+
 ## Gets the current NetworkState
 func get_network_state() -> NetworkState:
 	return _network_state
@@ -532,6 +558,14 @@ func get_gateway_string() -> String:
 ## Returns the UNIX timestamp of when this device last sent a discovery message
 func get_last_seen() -> float:
 	return _last_seen
+
+
+## Gets the device name
+func get_device_name() -> String:
+	if _remote_device_manager_attributes.has(AttributeID.NameString):
+		return type_convert(_remote_device_manager_attributes[AttributeID.NameString].value, TYPE_STRING)
+	else:
+		return ""
 
 
 ## Returns True if there is an active session to the remote device

@@ -43,6 +43,41 @@ enum DiscoveryState {
 const Flags: Dictionary[String, int] = HiQNetHeader.Flags
 
 
+## HiQNetConfig object
+class HiQNetConfig extends Object:
+	## Automatically takes this device online at launch
+	static var auto_start: bool = false
+	
+	## Default IP addres
+	static var ip_address: String = "127.0.0.1"
+	
+	## Default network broadcast address
+	static var network_broadcast: String = "192.168.1.255"
+	
+	## HiQNet Device Number
+	static var device_number: int = randi_range(1, 2**16 - 1-1)
+	
+	## Gets all remote device names as soon as they are found on the network
+	static var fetch_name_on_disco: bool = false
+	
+	## Loads config from a file
+	static func load_config(p_path: String) -> bool:
+		var script: Variant = load(p_path)
+		
+		if script is not GDScript or script.get("config") is not Dictionary:
+			return false
+		
+		var config: Dictionary = script.get("config")
+		
+		auto_start = type_convert(config.get("auto_start", auto_start), TYPE_BOOL)
+		ip_address = type_convert(config.get("ip_address", ip_address), TYPE_STRING)
+		network_broadcast = type_convert(config.get("network_broadcast", network_broadcast), TYPE_STRING)
+		device_number = type_convert(config.get("device_number", device_number), TYPE_INT)
+		fetch_name_on_disco = type_convert(config.get("fetch_name_on_disco", fetch_name_on_disco), TYPE_BOOL)
+		
+		return true
+
+
 ## -------------------
 ## Network Connections
 ## -------------------
@@ -60,7 +95,10 @@ var _tcp_server: TCPServer = TCPServer.new()
 var _stream_peers: Array[StreamPeerTCP]
 
 ## IP Address of this device
-var _ip_address: PackedByteArray = [192,168,1,70]
+var _ip_address: PackedByteArray = [0,0,0,0]
+
+## Network Broacast address
+var _broadcast_address: PackedByteArray = [0,0,0,0]
 
 ## Mac Address of this device
 #var _mac_address: PackedByteArray = [0x00, 0x17, 0x24, 0x82, 0x62, 0x63]
@@ -104,9 +142,13 @@ var _connected_devices: Dictionary[int, HiQNetDevice]
 
 ## Init
 func _init() -> void:
-	#_device_number = randi_range(1, DEVICE_NUMBER_BROADCAST-1)
+	HiQNetConfig.load_config("res://HiQNetConfig.gd")
+	
+	_device_number = HiQNetConfig.device_number
+	_ip_address = HiQNetHeader.ip_to_bytes(HiQNetConfig.ip_address)
+	_broadcast_address = HiQNetHeader.ip_to_bytes(HiQNetConfig.network_broadcast)
+	
 	_udp_broadcast.set_broadcast_enabled(true)
-	_udp_broadcast.set_dest_address("192.168.1.255", HIQNET_PORT)
 
 
 ## Ready
@@ -114,12 +156,14 @@ func _ready() -> void:
 	_discovery_timer.wait_time = _discovery_interval
 	_discovery_timer.autostart = true
 	_discovery_timer.timeout.connect(func ():
-		if _discovery_state == DiscoveryState.ENABLED:
+		if _discovery_state == DiscoveryState.ENABLED and _network_state == NetworkState.ONLINE:
 			send_discovery_broadcast()
 	)
 	
 	add_child(_discovery_timer)
-	go_online()
+	
+	if HiQNetConfig.auto_start:
+		go_online()
 
 
 ## Process
@@ -157,8 +201,11 @@ func handle_message(p_message: HiQNetHeader, p_stream_peer: StreamPeerTCP = null
 		HiQNetHeader.MessageType.DiscoInfo:
 			if not has_seen_device(p_message.source_device):
 				var device: HiQNetDevice = HiQNetDevice.create_from_discovery(p_message)
-				
 				add_child(device)
+				
+				if HiQNetConfig.fetch_name_on_disco:
+					device.send_get_attributes([HiQNetGetAttributes.AttributeID.NameString], HiQNetDevice.TransportType.UDP)
+				
 				_discovered_devices[p_message.source_device] = device
 				device_discovered.emit(device)
 	
@@ -176,7 +223,9 @@ func go_online() -> bool:
 	if _network_state == NetworkState.ONLINE:
 		return false
 	
+	_udp_broadcast.set_dest_address(HiQNetHeader.bytes_to_ip(_broadcast_address), HIQNET_PORT)
 	_udp_broadcast.bind(HIQNET_PORT)
+	
 	_tcp_server.listen(HIQNET_PORT, HiQNetHeader.bytes_to_ip(_ip_address))
 	
 	if _discovery_state == DiscoveryState.ENABLED:
@@ -226,6 +275,11 @@ func get_ip_address() -> PackedByteArray:
 	return _ip_address
 
 
+## Returns the network broadcast address
+func get_broadcast_address() -> PackedByteArray:
+	return _broadcast_address
+
+
 ## Returns the MAC Address of this device
 func get_mac_address() -> PackedByteArray:
 	return _mac_address
@@ -260,6 +314,30 @@ func set_discovery_state(p_discovery_state: DiscoveryState) -> bool:
 	discovery_state_changed.emit(_discovery_state)
 	
 	return true
+
+
+## Sets the Ip Address
+func set_ip_address(p_ip_address: String) -> void:
+	if _network_state != NetworkState.OFFLINE:
+		return
+	
+	_ip_address = HiQNetHeader.ip_to_bytes(p_ip_address)
+
+
+## Sets the Ip Address
+func set_broadcast_address(p_broadcast_address: String) -> void:
+	if _network_state != NetworkState.OFFLINE:
+		return
+	
+	_broadcast_address = HiQNetHeader.ip_to_bytes(p_broadcast_address)
+
+
+## Sets the device number
+func set_device_number(p_device_number: int) -> void:
+	if _network_state != NetworkState.OFFLINE:
+		return
+	
+	_device_number = p_device_number
 
 
 ## Returns true if the given device number has been seen on the network

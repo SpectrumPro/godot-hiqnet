@@ -23,7 +23,8 @@ var _selected_device: HiQNetDevice
 
 ## SignalGroup for all HiQNetDevices
 var _device_connections: SignalGroup = SignalGroup.new([
-	_on_device_network_state_changed
+	_on_device_network_state_changed,
+	_on_device_name_changed
 ]).set_prefix("_on_device_")
 
 
@@ -44,7 +45,7 @@ func _on_device_discovred(p_device: HiQNetDevice) -> void:
 	
 	var item: TreeItem = discovred_tree.create_item()
 	
-	#item.set_text(Columns.NAME, p_device.)
+	item.set_text(Columns.NAME, p_device.get_device_name())
 	item.set_text(Columns.DEVICE_NUMBER, str(p_device.get_device_number()))
 	item.set_text(Columns.IP_ADDRESS, p_device.get_ip_address_string())
 	item.set_text(Columns.NETWORK_STATE, p_device.get_network_state_human())
@@ -56,6 +57,11 @@ func _on_device_discovred(p_device: HiQNetDevice) -> void:
 ## Called when the network state is changed on a device
 func _on_device_network_state_changed(p_network_state: HiQNetDevice.NetworkState, p_device: HiQNetDevice) -> void:
 	_discovered_devices.right(p_device).set_text(Columns.NETWORK_STATE, p_device.get_network_state_human())
+
+
+## Called when a device name is changed
+func _on_device_name_changed(p_new_name: String, p_device: HiQNetDevice) -> void:
+	_discovered_devices.right(p_device).set_text(Columns.NAME, p_new_name)
 
 
 ## Called when an item is selected in the tree
