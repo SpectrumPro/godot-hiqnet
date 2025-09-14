@@ -15,6 +15,9 @@ signal last_seen_time_changed(time: float)
 ## Emitted when the device name is changed
 signal name_changed(new_name: String)
 
+## Emitted when a MultiParamSet message is recieved, or when parameters are changed on the remote device
+signal parameters_changed(p_address: Array, p_parameters: Array)
+
 
 ## The TCP/UDP port for HiQNet
 const HIQNET_PORT: int = HQ.HIQNET_PORT
@@ -74,6 +77,12 @@ var _tcp_message_queue: Array[HiQNetHeader]
 ## True if this device should establish a session with the remote device once TCP connects
 var _establish_session_once_connected: bool = false
 
+## True if this device will auto re-create a session if the remote device attepts to end the session
+var _allow_disonnect: bool = true
+
+## If true this device will auto re-connect to the remote device if it is re-discovred on then network after going offline
+var _auto_reconnect: bool = false
+
 ## -----------
 ## Device Info
 ## -----------
@@ -114,6 +123,9 @@ var _local_session_number: int = 0
 ## Session number for the remote device
 var _remote_session_number: int = 0
 
+## All active parameter subscriptions
+var _active_subscriptions: Array[Array]
+
 ## All the attributes in the "Device Manager Virtual Device" of this device
 var _local_device_manager_attributes: Dictionary[int, HiQNetHeader.Parameter] = {
 	AttributeID.ClassName: 			HiQNetHeader.Parameter.new(AttributeID.ClassName, DataType.STRING, "Si Impact 2.0"),
@@ -123,6 +135,11 @@ var _local_device_manager_attributes: Dictionary[int, HiQNetHeader.Parameter] = 
 
 ## All the attributes in the "Device Manager Virtual Device" of the remote device
 var _remote_device_manager_attributes: Dictionary[int, HiQNetHeader.Parameter] = {
+	
+}
+
+## A cache of all parameters of the remote device that have been sent to this device
+var _remote_parameter_cache: Dictionary[Array, Dictionary] = {
 	
 }
 
@@ -350,6 +367,9 @@ func handle_message(p_message: HiQNetHeader) -> void:
 			match _network_state:
 				NetworkState.OFFLINE:
 					_set_network_state(NetworkState.DISCOVERED)
+					
+					if _auto_reconnect:
+						start_session()
 				
 				NetworkState.CONNECTED:
 					if has_active_session() and p_message.dest_device == HQ.get_device_number() and p_message.is_information():
@@ -375,11 +395,17 @@ func handle_message(p_message: HiQNetHeader) -> void:
 				
 				send_hello_res(_local_session_number, _remote_session_number)
 				_set_network_state(NetworkState.CONNECTED)
+			
+			for address: Array in _active_subscriptions:
+				subscribe_to_all_in(address)
 		
 		MessageType.GoodBye:
 			p_message = p_message as HiQNetGoodbye
 			_set_network_state(NetworkState.OFFLINE)
 			disconnect_tcp()
+			
+			if not _allow_disonnect:
+				start_session()
 		
 		MessageType.GetAttributes:
 			p_message = p_message as HiQNetGetAttributes
@@ -393,6 +419,15 @@ func handle_message(p_message: HiQNetHeader) -> void:
 			
 			else:
 				send_set_attributes(p_message.get_attributes.keys(), TransportType.TCP)
+		
+		MessageType.MultiParamSet:
+			p_message = p_message as HiQNetMultiParamSet
+			
+			var cache: Dictionary = _remote_parameter_cache.get_or_add(p_message.dest_address, {})
+			for parameter: HiQNetHeader.Parameter in p_message.set_parameters.values():
+				cache[parameter.id] = parameter
+			
+			parameters_changed.emit(p_message.dest_address, p_message.set_parameters.values())
 
 
 ## Auto fill the infomation in a HiQNetHeadder for sending to the remote device
@@ -471,18 +506,43 @@ func send_hello_res(p_local_session_number: int, p_remote_session_number: int) -
 func subscribe_to_all_in(p_address: Array, p_transport_type: TransportType = TransportType.AUTO) -> Error:
 	var message: HiQNetParameterSubscribeAll = auto_full_headder(HiQNetParameterSubscribeAll.new(), 0, Array(p_address, TYPE_INT, "", null))
 	
+	if not is_subscribed_to(p_address):
+		_active_subscriptions.append(p_address)
+	
 	return send_message(message, p_transport_type)
 
 
 ## Sets one or more parameters in a Virtual Device or Object
 func set_parameters(p_source_address: Array, p_dest_address: Array, p_parameters: Array, p_transport_type: TransportType = TransportType.AUTO) -> Error:
 	var message: HiQNetMultiParamSet = auto_full_headder(HiQNetMultiParamSet.new(), 0, Array(p_dest_address, TYPE_INT, "", null), Array(p_source_address, TYPE_INT, "", null))
-
+	var cache: Dictionary = _remote_parameter_cache.get_or_add(p_dest_address, {})
+	
 	for parameter: Variant in p_parameters:
 		if parameter is HiQNetHeader.Parameter:
 			message.set_parameters[parameter.id] = parameter
+			cache[parameter.id] = parameter
+	
+	parameters_changed.emit(p_dest_address, p_parameters)
+	return send_message(message, p_transport_type)
 
-			return send_message(message, p_transport_type)
+
+## Gets one or more parameters from the remote device
+func get_parameters() -> void:
+	pass ## TODO
+
+
+## Gets remote device parameters from the local cache
+func get_parameters_from_cache(p_address: Array, p_pids: Array[int]) -> Dictionary[int, HiQNetHeader.Parameter]:
+	var result: Dictionary[int, HiQNetHeader.Parameter] = {}
+	
+	if p_address not in _remote_parameter_cache:
+		return result
+	
+	for pid: int in p_pids:
+		if _remote_parameter_cache[p_address].has(pid):
+			result[pid] = _remote_parameter_cache[p_address][pid]
+	
+	return result
 
 
 ## Gets the current NetworkState
@@ -568,9 +628,34 @@ func get_device_name() -> String:
 		return ""
 
 
+## Gets the disconnect allow state
+func get_allow_disconnect() -> bool:
+	return _allow_disonnect
+
+
+## Gets the auto reconnect state
+func get_auto_reconnect() -> bool:
+	return _auto_reconnect
+
+
+## Sets the disconnect allow state
+func set_allow_disconnect(p_allow_disconnect: bool) -> void:
+	_allow_disonnect = p_allow_disconnect
+
+
+## Sets the auto reconnect state
+func set_auto_reconnect(p_auto_reconnect: bool) -> void:
+	_auto_reconnect = p_auto_reconnect
+
+
 ## Returns True if there is an active session to the remote device
 func has_active_session() -> bool:
 	return _remote_session_number != 0
+
+
+## Checks if there is an active parameter subscriptions to the remote device
+func is_subscribed_to(p_address: Array) -> bool:
+	return p_address in _active_subscriptions
 
 
 ## Sets the current NetworkState

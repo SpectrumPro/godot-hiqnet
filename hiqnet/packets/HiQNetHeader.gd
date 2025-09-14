@@ -69,10 +69,12 @@ enum DecodeError {
 
 ## Matches the MessageType enum to a class
 static var ClassTypes: Dictionary[int, Script] = {
-	MessageType.DiscoInfo: 		HiQNetDiscoInfo,
-	MessageType.Hello: 			HiQNetHello,
-	MessageType.GetAttributes: 	HiQNetGetAttributes,
-	MessageType.GoodBye: 		HiQNetGoodbye
+	MessageType.DiscoInfo: 				HiQNetDiscoInfo,
+	MessageType.Hello: 					HiQNetHello,
+	MessageType.GetAttributes:		 	HiQNetGetAttributes,
+	MessageType.GoodBye: 				HiQNetGoodbye,
+	MessageType.ParameterSubscribeAll: 	HiQNetParameterSubscribeAll,
+	MessageType.MultiParamSet: 			HiQNetMultiParamSet
 }
 
 
@@ -411,12 +413,16 @@ static func decode_parameters(p_packet: PackedByteArray) -> Dictionary[int, Para
 				parameters[pid] = Parameter.new(pid, DataType.BLOCK, block_value)
 			
 			DataType.LONG:
-				# Long value is 4 bytes (big-endian)
+				# Long value is 4 bytes (big-endian, signed 32-bit)
 				if offset + LONG_LENGTH > p_packet.size():
 					break
 				var value: int = (p_packet[offset] << 24) | (p_packet[offset + 1] << 16) | (p_packet[offset + 2] << 8) | p_packet[offset + 3]
+
+				# Handle negative numbers (sign extension for 32-bit)
+				if value & 0x80000000:
+					value -= 0x100000000
+
 				offset += 4
-				
 				parameters[pid] = Parameter.new(pid, DataType.LONG, value)
 	
 	return parameters
