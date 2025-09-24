@@ -55,7 +55,7 @@ func _on_device_discovred(p_device: HiQNetDevice) -> void:
 
 
 ## Called when the network state is changed on a device
-func _on_device_network_state_changed(p_network_state: HiQNetDevice.NetworkState, p_device: HiQNetDevice) -> void:
+func _on_device_network_state_changed(_p_network_state: HiQNetDevice.NetworkState, p_device: HiQNetDevice) -> void:
 	_discovered_devices.right(p_device).set_text(Columns.NETWORK_STATE, p_device.get_network_state_human())
 
 
