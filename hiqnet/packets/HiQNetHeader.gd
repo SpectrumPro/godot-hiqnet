@@ -51,7 +51,7 @@ enum DataType {
 
 ## Flags enum (bit positions)
 enum Flags {
-	NONE						= 1,		 ## No Flags
+	NONE						= 0,		 ## No Flags
 	REQUEST_ACK					= (1 << 0),  ## Request acknowledgment
 	ACKNOWLEDGEMENT				= (1 << 1),  ## Acknowledgement flag
 	INFORMATION					= (1 << 2),  ## Information flag
@@ -255,6 +255,12 @@ static func phrase_packet(p_packet: PackedByteArray) -> HiQNetHeader:
 		return null
 	
 	message = ClassTypes[p_message_type].new()
+	
+	if len(p_packet) < 24:
+		message.decode_error = DecodeError.LENGTH_INVALID
+		printerr("DecodeError.LENGTH_INVALID")
+		return
+	
 	message.source_device = (p_packet[6] << 8) | p_packet[7]
 	message.source_address = PackedByteArray(p_packet.slice(8, 12))
 	
@@ -268,14 +274,14 @@ static func phrase_packet(p_packet: PackedByteArray) -> HiQNetHeader:
 	var offset: int = 25
 	
 	if (message.flags & Flags.ERROR):
-		var length: int = (p_packet[offset] << 8) | p_packet[offset + 1]
+		var length: int = (p_packet.get(offset) << 8) | p_packet.get(offset + 1)
 		offset += 2 + 2 + length
 	
 	if (message.flags & Flags.MULTIPART):
 		offset += 6
 	
 	if (message.flags & Flags.SESSION_NUMBER):
-		message.session_number = (p_packet[offset] << 8) | p_packet[offset + 1]
+		message.session_number = (p_packet.get(offset) << 8) | p_packet.get(offset + 1)
 	
 	message._phrase_packet(p_packet)
 	return message
@@ -409,7 +415,7 @@ static func encode_parameters(p_parameters: Dictionary[int, Parameter]) -> Packe
 		
 		match param.data_type:
 			DataType.STRING:
-				var ascii: PackedByteArray = param.value.to_ascii_buffer()
+				var ascii: PackedByteArray = str(param.value).to_ascii_buffer()
 				var length: int = ((len(ascii) * 2) + 2) if ascii else 0
 				packet.append_array(ba(length, 2)) # String Length
 				
@@ -420,16 +426,17 @@ static func encode_parameters(p_parameters: Dictionary[int, Parameter]) -> Packe
 					packet.append_array([0x00, 0x00]) # Append null terminator (2 bytes)
 			
 			DataType.BLOCK:
-				var block_bytes: PackedByteArray = param.value
-				
-				# Write length (2 bytes)
-				packet.append_array(ba(block_bytes.size(), 2))
-				
-				# Write block data
-				packet.append_array(block_bytes)
+				printerr("DataType.BLOCK Not Supported")
+				#var block_bytes: PackedByteArray = param.value
+				#
+				## Write length (2 bytes)
+				#packet.append_array(ba(block_bytes.size(), 2))
+				#
+				## Write block data
+				#packet.append_array(block_bytes)
 			
 			DataType.LONG:
-				var value: int = param.value
+				var value: int = int(param.value)
 				
 				# Write 4-byte signed integer
 				packet.append_array(ba(value, 4))
